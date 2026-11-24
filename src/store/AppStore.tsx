@@ -14,6 +14,9 @@ import {
   employees,
   followUps as seedFollowUps,
   notifications as seedNotifications,
+  researchResultToSchool,
+  researchSchoolId,
+  schools as seedSchools,
 } from '../data/demo'
 import type {
   Appointment,
@@ -24,7 +27,12 @@ import type {
   EmailStatus,
   Employee,
   FollowUp,
+  ResearchResult,
+  SalesStage,
+  School,
+  SchoolContact,
 } from '../lib/types'
+import { isoDay } from '../lib/utils'
 import {
   createDefaultPolicy,
   mergePolicy,
@@ -50,6 +58,18 @@ export interface NewAppointmentInput {
   emailStatus?: EmailStatus
 }
 
+export interface NewFollowUpInput {
+  schoolId: string
+  contactId: string
+  employeeId: string
+  /** ISO yyyy-MM-dd date the next follow-up is due. */
+  nextFollowUpOn: string
+  reason: string
+  notes?: string
+  /** Free-text channel label recorded with the follow-up history. */
+  channel?: string
+}
+
 export interface Toast {
   id: string
   tone: 'success' | 'error' | 'info' | 'warning'
@@ -68,15 +88,40 @@ interface AppState {
   updateSchedulingPolicy: (next: SchedulingPolicy) => void
 
   employees: Employee[]
+  /**
+   * Single source of truth for school records. Every screen (schools list,
+   * appointment booking, agent workflows, reports) reads this shared state so
+   * a record added anywhere is visible everywhere immediately.
+   */
+  schools: School[]
+  schoolById: (id: string) => School | undefined
+  /** Adds one school; returns false when a record with the same id/name exists. */
+  addSchool: (school: School) => boolean
+  /** Adds several schools with duplicate detection; returns how many were added. */
+  addSchools: (schools: School[]) => number
+  /** Registers a research result once — returns the existing record on a duplicate. */
+  registerResearchSchool: (result: ResearchResult, employeeId: string) => School
+  /** Appends a contact to a school; returns false when the e-mail is already on file. */
+  addSchoolContact: (schoolId: string, contact: SchoolContact) => boolean
+  verifyContact: (schoolId: string, contactId: string) => void
+  updateSchoolStage: (schoolId: string, stage: SalesStage) => void
+  assignSchoolOwner: (schoolId: string, employeeId: string) => void
+
   appointments: Appointment[]
   notifications: AppNotification[]
   approvals: ApprovalRequest[]
   followUps: FollowUp[]
 
   createAppointment: (input: NewAppointmentInput) => Appointment
+  createFollowUp: (input: NewFollowUpInput) => FollowUp
   updateAppointmentStatus: (id: string, status: AppointmentStatus, note?: string) => void
   cancelAppointment: (id: string) => void
   rescheduleAppointment: (id: string, date: string, start: string, end: string) => void
+  /** Edits the invitation-specific meeting details without touching the standard email template. */
+  updateAppointmentDetails: (
+    id: string,
+    patch: Pick<Appointment, 'date' | 'startTime' | 'endTime' | 'format' | 'location'>,
+  ) => void
   requestApproval: (appointmentId: string, schoolId: string, reason: string) => ApprovalRequest
   decideApproval: (id: string, decision: 'Approved' | 'Rejected', note?: string) => void
   completeFollowUp: (id: string) => void
@@ -91,6 +136,9 @@ interface AppState {
 const AppContext = createContext<AppState | null>(null)
 
 const POLICY_KEY = 'eduvian.demo.policy'
+
+/** Name matching used for school duplicate detection (ignores spacing/punctuation). */
+const normalizeSchoolName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 
 function loadPolicy(): SchedulingPolicy {
   try {
@@ -114,9 +162,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>(seedNotifications)
   const [approvals, setApprovals] = useState<ApprovalRequest[]>(seedApprovals)
   const [followUps, setFollowUps] = useState<FollowUp[]>(seedFollowUps)
+  const [schools, setSchoolsState] = useState<School[]>(seedSchools)
   const [schedulingPolicy, setSchedulingPolicy] = useState<SchedulingPolicy>(loadPolicy)
   const [toasts, setToasts] = useState<Toast[]>([])
   const toastId = useRef(0)
+
+  /**
+   * Mirror of the schools state so mutations can be computed synchronously
+   * (React state updates are async). Every writer goes through `commitSchools`,
+   * which keeps the ref, the state and every screen in sync.
+   */
+  const schoolsRef = useRef<School[]>(seedSchools)
+
+  const commitSchools = useCallback((next: School[]) => {
+    schoolsRef.current = next
+    setSchoolsState(next)
+  }, [])
 
   const dismissToast = useCallback((id: string) => {
     setToasts((current) => current.filter((toast) => toast.id !== id))
@@ -164,6 +225,131 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Keep the in-memory policy when storage is unavailable.
     }
   }, [])
+
+  /* ------------------------------ school records ------------------------------ */
+
+  const schoolById = useCallback(
+    (id: string) => schoolsRef.current.find((school) => school.id === id),
+    [],
+  )
+
+  const addSchool = useCallback(
+    (school: School) => {
+      const current = schoolsRef.current
+      const duplicate = current.some(
+        (item) =>
+          item.id === school.id ||
+          normalizeSchoolName(item.name) === normalizeSchoolName(school.name),
+      )
+      if (duplicate) return false
+      commitSchools([school, ...current])
+      return true
+    },
+    [commitSchools],
+  )
+
+  const addSchools = useCallback(
+    (list: School[]) => {
+      const current = schoolsRef.current
+      const seen = new Set(
+        current.map((school) => `${school.id}|${normalizeSchoolName(school.name)}`),
+      )
+      const additions: School[] = []
+      for (const school of list) {
+        const key = `${school.id}|${normalizeSchoolName(school.name)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        additions.push(school)
+      }
+      if (additions.length === 0) return 0
+      commitSchools([...additions, ...current])
+      return additions.length
+    },
+    [commitSchools],
+  )
+
+  const registerResearchSchool = useCallback(
+    (result: ResearchResult, employeeId: string) => {
+      const current = schoolsRef.current
+      const normalized = result.name.trim().toLowerCase()
+      const existing =
+        (result.duplicateOf
+          ? current.find((school) => school.id === result.duplicateOf)
+          : undefined) ??
+        current.find((school) => school.name.trim().toLowerCase() === normalized) ??
+        current.find((school) => school.id === researchSchoolId(result))
+      if (existing) return existing
+      const school = researchResultToSchool(result, employeeId)
+      commitSchools([school, ...current])
+      return school
+    },
+    [commitSchools],
+  )
+
+  const addSchoolContact = useCallback(
+    (schoolId: string, contact: SchoolContact) => {
+      const current = schoolsRef.current
+      const school = current.find((item) => item.id === schoolId)
+      if (!school) return false
+      const email = contact.email.trim().toLowerCase()
+      const duplicate =
+        email !== '' &&
+        school.contacts.some((item) => item.email.trim().toLowerCase() === email)
+      if (duplicate) return false
+      commitSchools(
+        current.map((item) =>
+          item.id === schoolId ? { ...item, contacts: [...item.contacts, contact] } : item,
+        ),
+      )
+      return true
+    },
+    [commitSchools],
+  )
+
+  const verifyContact = useCallback(
+    (schoolId: string, contactId: string) => {
+      commitSchools(
+        schoolsRef.current.map((school) =>
+          school.id !== schoolId
+            ? school
+            : {
+                ...school,
+                contacts: school.contacts.map((contact) =>
+                  contact.id === contactId
+                    ? {
+                        ...contact,
+                        verification: 'verified' as const,
+                        verifiedOn: isoDay(0),
+                        notes: 'Verified by employee in this session.',
+                      }
+                    : contact,
+                ),
+              },
+        ),
+      )
+    },
+    [commitSchools],
+  )
+
+  const updateSchoolStage = useCallback(
+    (schoolId: string, stage: SalesStage) => {
+      commitSchools(
+        schoolsRef.current.map((school) => (school.id === schoolId ? { ...school, stage } : school)),
+      )
+    },
+    [commitSchools],
+  )
+
+  const assignSchoolOwner = useCallback(
+    (schoolId: string, employeeId: string) => {
+      commitSchools(
+        schoolsRef.current.map((school) =>
+          school.id === schoolId ? { ...school, assignedEmployeeId: employeeId } : school,
+        ),
+      )
+    },
+    [commitSchools],
+  )
 
   const createAppointment = useCallback(
     (input: NewAppointmentInput) => {
@@ -245,6 +431,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     at: new Date().toISOString(),
                     by: actor,
                     note: `Moved to ${date} · ${start}`,
+                  },
+                ],
+              }
+            : appointment,
+        ),
+      )
+    },
+    [user],
+  )
+
+  const updateAppointmentDetails = useCallback(
+    (
+      id: string,
+      patch: Pick<Appointment, 'date' | 'startTime' | 'endTime' | 'format' | 'location'>,
+    ) => {
+      const actor = user?.name ?? 'Employee'
+      setAppointments((current) =>
+        current.map((appointment) =>
+          appointment.id === id
+            ? {
+                ...appointment,
+                ...patch,
+                updatedAt: new Date().toISOString(),
+                history: [
+                  ...appointment.history,
+                  {
+                    status: appointment.status,
+                    at: new Date().toISOString(),
+                    by: actor,
+                    note: 'Invitation details edited · standard introduction unchanged',
                   },
                 ],
               }
@@ -362,6 +578,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  /**
+   * Creates a follow-up record for real (the record drives the status badge —
+   * past dates start as Overdue, today as Due Today, future dates as Pending).
+   */
+  const createFollowUp = useCallback((input: NewFollowUpInput): FollowUp => {
+    const today = isoDay(0)
+    const status: FollowUp['status'] =
+      input.nextFollowUpOn < today ? 'Overdue' : input.nextFollowUpOn === today ? 'Due Today' : 'Pending'
+    const followUp: FollowUp = {
+      id: `fu-${Math.random().toString(36).slice(2, 7)}`,
+      schoolId: input.schoolId,
+      contactId: input.contactId,
+      employeeId: input.employeeId,
+      lastContactOn: today,
+      nextFollowUpOn: input.nextFollowUpOn,
+      reason: input.reason,
+      status,
+      notes: input.notes?.trim() ?? '',
+      history: [
+        {
+          at: new Date().toISOString(),
+          text: input.channel ? `Follow-up created · Channel: ${input.channel}` : 'Follow-up created',
+        },
+      ],
+    }
+    setFollowUps((current) => [followUp, ...current])
+    return followUp
+  }, [])
+
   const markNotificationRead = useCallback((id: string) => {
     setNotifications((current) =>
       current.map((notification) =>
@@ -384,14 +629,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       schedulingPolicy,
       updateSchedulingPolicy,
       employees,
+      schools,
+      schoolById,
+      addSchool,
+      addSchools,
+      registerResearchSchool,
+      addSchoolContact,
+      verifyContact,
+      updateSchoolStage,
+      assignSchoolOwner,
       appointments,
       notifications,
       approvals,
       followUps,
       createAppointment,
+      createFollowUp,
       updateAppointmentStatus,
       cancelAppointment,
       rescheduleAppointment,
+      updateAppointmentDetails,
       requestApproval,
       decideApproval,
       completeFollowUp,
@@ -408,14 +664,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
       switchDemoUser,
       schedulingPolicy,
       updateSchedulingPolicy,
+      schools,
+      schoolById,
+      addSchool,
+      addSchools,
+      registerResearchSchool,
+      addSchoolContact,
+      verifyContact,
+      updateSchoolStage,
+      assignSchoolOwner,
       appointments,
       notifications,
       approvals,
       followUps,
       createAppointment,
+      createFollowUp,
       updateAppointmentStatus,
       cancelAppointment,
       rescheduleAppointment,
+      updateAppointmentDetails,
       requestApproval,
       decideApproval,
       completeFollowUp,

@@ -21,7 +21,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { cn, relativeTime } from '../../lib/utils'
-import { employeeById, schoolById } from '../../data/demo'
+import { employeeById } from '../../data/demo'
 import { useApp } from '../../store/AppStore'
 import { Avatar, Kbd } from '../ui/Avatar'
 import { IconButton } from '../ui/Button'
@@ -298,7 +298,7 @@ export function Topbar({
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState('')
   const navigate = useNavigate()
-  const { appointments, notifications } = useApp()
+  const { appointments, notifications, schools, schoolById } = useApp()
   const [cursor, setCursor] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -325,15 +325,17 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       { type: 'Page', label: 'Settings', to: '/settings' },
     ].filter((page) => !q || page.label.toLowerCase().includes(q))
 
-    const schoolResults = (['sch-1', 'sch-2', 'sch-3', 'sch-4', 'sch-5', 'sch-6', 'sch-7', 'sch-8', 'sch-9', 'sch-10'] as const)
-      .map((id) => schoolById(id))
-      .filter((school) => school && (!q || school!.name.toLowerCase().includes(q) || school!.city.toLowerCase().includes(q)))
+    const schoolResults = schools
+      .filter(
+        (school) =>
+          !q || school.name.toLowerCase().includes(q) || school.city.toLowerCase().includes(q),
+      )
       .slice(0, 5)
       .map((school) => ({
         type: 'School',
-        label: school!.name,
-        hint: `${school!.type} · ${school!.city}`,
-        to: `/schools?school=${school!.id}`,
+        label: school.name,
+        hint: `${school.type} · ${school.city}`,
+        to: `/schools?school=${school.id}`,
       }))
 
     const appointmentResults = appointments
@@ -350,7 +352,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       }))
 
     return [...pages, ...schoolResults, ...appointmentResults] as PaletteResult[]
-  }, [query, appointments])
+  }, [query, appointments, schools, schoolById])
 
   useEffect(() => {
     if (!open) return

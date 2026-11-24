@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ArrowRight,
   BadgeCheck,
@@ -20,11 +20,20 @@ import {
   Sparkles,
   TriangleAlert,
   UserPlus,
+  UserRound,
 } from 'lucide-react'
 import { PageHeader, Card } from '../components/ui/Card'
 import { Button, IconButton } from '../components/ui/Button'
 import { Badge, ClassBadge, DemoTag } from '../components/ui/Badge'
-import { Input, Label, SegmentedControl, Select, Textarea } from '../components/ui/Field'
+import {
+  Checkbox,
+  Input,
+  Label,
+  SegmentedControl,
+  Select,
+  Textarea,
+  Toggle,
+} from '../components/ui/Field'
 import { Table, TBody, TD, TH, THead, TR } from '../components/ui/Table'
 import { Drawer, Modal } from '../components/ui/Modal'
 import { Avatar, EmptyState } from '../components/ui/Avatar'
@@ -33,10 +42,30 @@ import { useApp } from '../store/AppStore'
 import {
   emails as demoEmails,
   employees,
+  researchResultToSchool,
   researchResults,
-  schools as demoSchools,
 } from '../data/demo'
-import type { ResearchResult, School, SchoolContact, SchoolType, SalesStage } from '../lib/types'
+import type {
+  ResearchResult,
+  School,
+  SchoolContact,
+  SchoolType,
+  SalesStage,
+} from '../lib/types'
+import {
+  DEFAULT_FILTERS,
+  contactLabelTone,
+  contactStatusLabel,
+  describeFilters,
+  displayMediums,
+  districtsOf,
+  domainOf,
+  filterResearchSchools,
+  passedCheckCount,
+  sortResearchSchools,
+  statesOf,
+} from '../lib/research'
+import type { ResearchFilters } from '../lib/research'
 import {
   appointmentStatusTone,
   cn,
@@ -71,8 +100,17 @@ const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '
 
 export function SchoolsPage() {
   const [params, setParams] = useSearchParams()
-  const { appointments, pushToast } = useApp()
-  const [schools, setSchools] = useState<School[]>(demoSchools)
+  const {
+    appointments,
+    pushToast,
+    user,
+    schools,
+    addSchool: addSchoolRecord,
+    addSchools,
+    verifyContact: verifyContactRecord,
+    updateSchoolStage,
+    assignSchoolOwner,
+  } = useApp()
   const [query, setQuery] = useState('')
   const [type, setType] = useState<'all' | SchoolType>('all')
   const [verification, setVerification] = useState<'all' | 'verified' | 'needs-review' | 'unverified'>('all')
@@ -114,50 +152,34 @@ export function SchoolsPage() {
   }
 
   function verifyContact(schoolId: string, contactId: string) {
-    setSchools((current) =>
-      current.map((school) =>
-        school.id !== schoolId
-          ? school
-          : {
-              ...school,
-              contacts: school.contacts.map((contact) =>
-                contact.id === contactId
-                  ? {
-                      ...contact,
-                      verification: 'verified',
-                      verifiedOn: new Date().toISOString().slice(0, 10),
-                      notes: 'Verified by employee in this session.',
-                    }
-                  : contact,
-              ),
-            },
-      ),
-    )
+    verifyContactRecord(schoolId, contactId)
     pushToast({
       tone: 'success',
       title: 'Contact marked verified',
-      description: 'Invitations can now be prepared for this contact. Persistence requires the backend.',
+      description: 'Invitations can now be prepared for this contact.',
     })
   }
 
   function updateStage(schoolId: string, stage: SalesStage) {
-    setSchools((current) =>
-      current.map((school) => (school.id === schoolId ? { ...school, stage } : school)),
-    )
+    updateSchoolStage(schoolId, stage)
     pushToast({ tone: 'info', title: 'Pipeline stage updated', description: `Moved to ${stage}.` })
   }
 
   function assignOwner(schoolId: string, employeeId: string) {
-    setSchools((current) =>
-      current.map((school) =>
-        school.id === schoolId ? { ...school, assignedEmployeeId: employeeId } : school,
-      ),
-    )
+    assignSchoolOwner(schoolId, employeeId)
     pushToast({ tone: 'success', title: 'Assignment updated' })
   }
 
   function addSchool(school: School) {
-    setSchools((current) => [school, ...current])
+    const added = addSchoolRecord(school)
+    if (!added) {
+      pushToast({
+        tone: 'error',
+        title: 'Duplicate school not added',
+        description: 'A record with this name already exists — open it instead of creating a copy.',
+      })
+      return
+    }
     setAddOpen(false)
     pushToast({
       tone: 'success',
@@ -165,6 +187,19 @@ export function SchoolsPage() {
       description: `${school.name} is now available for appointment booking.`,
     })
     openSchool(school.id)
+  }
+
+  /**
+   * Sends reviewed research results into the Lead Management pipeline. Each
+   * record enters at `New Lead` so an employee still reviews it before any
+   * outreach; the store skips anything already on file (same id or name) so a
+   * result can never create a duplicate. Returns how many were created.
+   */
+  function addResearchLeads(results: ResearchResult[]): number {
+    const employeeId = user?.id ?? employees[0].id
+    return addSchools(
+      results.map((result) => researchResultToSchool(result, employeeId, 'New Lead')),
+    )
   }
 
   return (
@@ -399,6 +434,7 @@ export function SchoolsPage() {
         open={researchOpen}
         onClose={() => setResearchOpen(false)}
         existingSchools={schools}
+        onAddLeads={addResearchLeads}
       />
     </div>
   )
@@ -420,6 +456,8 @@ function SchoolDrawer({
   appointments: ReturnType<typeof useApp>['appointments']
 }) {
   const [tab, setTab] = useState<'overview' | 'contacts' | 'appointments' | 'communication'>('overview')
+  const [addContactOpen, setAddContactOpen] = useState(false)
+  const navigate = useNavigate()
 
   if (!school) return null
 
@@ -446,7 +484,9 @@ function SchoolDrawer({
             size="sm"
             iconLeft={<CalendarClock className="size-4" />}
             onClick={() => {
-              window.location.href = '/agent?mode=existing'
+              // Carry the school into the booking agent so the record, contact,
+              // e-mail and phone are pre-loaded — no re-selection needed.
+              navigate(`/agent?mode=existing&school=${school.id}`)
             }}
           >
             Book appointment
@@ -614,7 +654,13 @@ function SchoolDrawer({
                 </div>
               </div>
             ))}
-            <Button variant="secondary" size="sm" fullWidth iconLeft={<UserPlus className="size-4" />}>
+            <Button
+              variant="secondary"
+              size="sm"
+              fullWidth
+              iconLeft={<UserPlus className="size-4" />}
+              onClick={() => setAddContactOpen(true)}
+            >
               Add contact
             </Button>
             <p className="text-[10.5px] leading-relaxed text-slate-400">
@@ -696,7 +742,173 @@ function SchoolDrawer({
           </div>
         )}
       </div>
+
+      <AddContactModal
+        open={addContactOpen}
+        onClose={() => setAddContactOpen(false)}
+        school={school}
+      />
     </Drawer>
+  )
+}
+
+function AddContactModal({
+  open,
+  onClose,
+  school,
+}: {
+  open: boolean
+  onClose: () => void
+  school: School
+}) {
+  const { addSchoolContact, pushToast } = useApp()
+  const [name, setName] = useState('')
+  const [designation, setDesignation] = useState<SchoolContact['designation']>('Principal')
+  const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
+  const [source, setSource] = useState('Manual entry by employee')
+
+  const emailTaken = useMemo(() => {
+    const value = email.trim().toLowerCase()
+    return value !== '' && school.contacts.some((item) => item.email.trim().toLowerCase() === value)
+  }, [email, school.contacts])
+
+  function reset() {
+    setName('')
+    setDesignation('Principal')
+    setEmail('')
+    setPhone('')
+    setSource('Manual entry by employee')
+  }
+
+  function submit() {
+    if (!name.trim() || emailTaken) return
+    const contact: SchoolContact = {
+      id: `con-${Math.random().toString(36).slice(2, 7)}`,
+      schoolId: school.id,
+      name: name.trim(),
+      designation,
+      email: email.trim(),
+      phone: phone.trim(),
+      source,
+      verification: 'unverified',
+      verifiedOn: null,
+      notes: 'Added by an employee — verification is required before outreach.',
+    }
+    const added = addSchoolContact(school.id, contact)
+    if (!added) {
+      pushToast({
+        tone: 'error',
+        title: 'Contact not added',
+        description: 'This e-mail address is already on file for this school.',
+      })
+      return
+    }
+    reset()
+    onClose()
+    pushToast({
+      tone: 'success',
+      title: 'Contact added',
+      description: `${contact.name} was added as unverified — mark it verified before the agent prepares an invitation.`,
+    })
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Add contact · ${school.name}`}
+      description="Contacts are stored with their source and start as unverified. The agent never uses an unverified e-mail in an invitation."
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={submit} disabled={!name.trim() || emailTaken}>
+            Add contact
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <Label required htmlFor="contact-name">
+            Full name
+          </Label>
+          <Input
+            id="contact-name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="e.g. R. Sundaram"
+          />
+        </div>
+        <div>
+          <Label htmlFor="contact-designation">Designation</Label>
+          <Select
+            id="contact-designation"
+            value={designation}
+            onChange={(event) =>
+              setDesignation(event.target.value as SchoolContact['designation'])
+            }
+          >
+            {(
+              [
+                'Principal',
+                'Correspondent',
+                'Director',
+                'Administrator',
+                'Management Representative',
+                'Other',
+              ] as SchoolContact['designation'][]
+            ).map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <Label htmlFor="contact-email">Official e-mail</Label>
+          <Input
+            id="contact-email"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="name@school.edu.in"
+          />
+          {emailTaken && (
+            <p className="mt-1.5 text-[11px] font-medium text-rose-600">
+              This e-mail is already on file for {school.name}.
+            </p>
+          )}
+        </div>
+        <div>
+          <Label htmlFor="contact-phone">Phone</Label>
+          <Input
+            id="contact-phone"
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            placeholder="+91"
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <Label htmlFor="contact-source">Source</Label>
+          <Select id="contact-source" value={source} onChange={(event) => setSource(event.target.value)}>
+            <option>Manual entry by employee</option>
+            <option>Public directory listing</option>
+            <option>School website</option>
+            <option>Phone call</option>
+          </Select>
+        </div>
+        <div className="sm:col-span-2 flex items-center gap-2 rounded-xl bg-slate-50 p-3 ring-1 ring-line ring-inset">
+          <ShieldAlert className="size-4 text-slate-400" />
+          <p className="text-[11px] text-slate-500">
+            New contacts appear as <strong className="font-semibold text-navy-800">Unverified</strong>{' '}
+            until an employee marks them verified.
+          </p>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -905,72 +1117,281 @@ function ResearchModal({
   open,
   onClose,
   existingSchools,
+  onAddLeads,
 }: {
   open: boolean
   onClose: () => void
   existingSchools: School[]
+  onAddLeads: (results: ResearchResult[]) => number
 }) {
   const { pushToast } = useApp()
-  const [query, setQuery] = useState('CBSE schools in Chennai')
+  const [filters, setFilters] = useState<ResearchFilters>(DEFAULT_FILTERS)
   const [running, setRunning] = useState(false)
   const [results, setResults] = useState<ResearchResult[]>([])
   const [step, setStep] = useState(0)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const timers = useRef<number[]>([])
 
-  function run() {
-    setRunning(true)
-    setResults([])
-    setStep(0)
-    const timers = [
-      window.setTimeout(() => setStep(1), 500),
-      window.setTimeout(() => setStep(2), 1100),
-      window.setTimeout(() => setStep(3), 1700),
-      window.setTimeout(() => {
-        setResults(researchResults)
-        setRunning(false)
-      }, 2200),
-    ]
-    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  const stateOptions = useMemo(() => statesOf(researchResults), [])
+  const districtOptions = useMemo(
+    () => districtsOf(researchResults, filters.state),
+    [filters.state],
+  )
+  const matchCount = useMemo(
+    () => filterResearchSchools(researchResults, filters).length,
+    [filters],
+  )
+
+  const summary = {
+    verified: results.filter((item) => item.verification === 'verified').length,
+    partial: results.filter((item) => item.verification === 'needs-review').length,
+    unverified: results.filter((item) => item.verification === 'unverified').length,
   }
 
   const steps = [
-    'Searching approved sources',
-    'Checking for duplicate records',
-    'Retrieving official contacts',
-    'Recording source and verification state',
+    'Querying approved search sources',
+    'Ranking official school websites',
+    'Visiting each school website',
+    'Extracting contacts, e-mails and addresses',
+    'Validating e-mail, phone and domain match',
+    'Checking against existing records',
   ]
+
+  function clearTimers() {
+    timers.current.forEach((timer) => window.clearTimeout(timer))
+    timers.current = []
+  }
+
+  function run() {
+    clearTimers()
+    setRunning(true)
+    setResults([])
+    setSelectedIds([])
+    setStep(0)
+    timers.current = [450, 900, 1350, 1800, 2250].map((delay, index) =>
+      window.setTimeout(() => setStep(index + 1), delay),
+    )
+    timers.current.push(
+      window.setTimeout(() => {
+        const matched = filterResearchSchools(researchResults, filters)
+        setResults(sortResearchSchools(matched, filters.priorityReputation))
+        setStep(steps.length)
+        setRunning(false)
+      }, 2700),
+    )
+  }
+
+  function handleClose() {
+    clearTimers()
+    setRunning(false)
+    onClose()
+  }
+
+  function isDuplicate(result: ResearchResult) {
+    if (result.duplicateOf) return true
+    return existingSchools.some((school) => normalize(school.name) === normalize(result.name))
+  }
+
+  function toggleSelected(id: string, next: boolean) {
+    setSelectedIds((current) =>
+      next ? [...current, id] : current.filter((item) => item !== id),
+    )
+  }
+
+  const selectableIds = results
+    .filter((result) => !isDuplicate(result))
+    .map((result) => result.id)
+  const allSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.includes(id))
+
+  function toggleAll(next: boolean) {
+    setSelectedIds(next ? selectableIds : [])
+  }
+
+  function addSelected() {
+    const chosen = results.filter(
+      (result) => selectedIds.includes(result.id) && !isDuplicate(result),
+    )
+    if (chosen.length === 0) return
+    const added = onAddLeads(chosen)
+    if (added === 0) {
+      pushToast({
+        tone: 'info',
+        title: 'No new records created',
+        description: 'Every selected school is already in your records — no duplicates were made.',
+      })
+    } else {
+      pushToast({
+        tone: 'success',
+        title: `${added} school${added === 1 ? '' : 's'} added to Lead Management`,
+        description: 'Each record enters at New Lead for employee review.',
+      })
+    }
+    setSelectedIds([])
+  }
 
   return (
     <Modal
       open={open}
-      onClose={onClose}
-      title="Research new schools"
-      description="Used only for schools outside your records, or when existing details are missing."
-      size="lg"
+      onClose={handleClose}
+      title="AI school research"
+      description="Filter schools, extract official contacts from each website, then verify them before anything enters your pipeline."
+      size="xl"
       footer={
         <>
-          <Button variant="secondary" size="sm" onClick={onClose}>
+          <Button variant="secondary" size="sm" onClick={handleClose}>
             Close
           </Button>
-          <Button size="sm" onClick={run} loading={running} iconLeft={<Search className="size-4" />}>
-            Research
-          </Button>
+          <div className="flex items-center gap-2">
+            {results.length > 0 && (
+              <Button
+                size="sm"
+                variant="soft"
+                disabled={selectedIds.length === 0}
+                onClick={addSelected}
+                iconLeft={<UserPlus className="size-4" />}
+              >
+                {selectedIds.length > 0
+                  ? `Add ${selectedIds.length} to Lead Management`
+                  : 'Add to Lead Management'}
+              </Button>
+            )}
+            <Button size="sm" onClick={run} loading={running} iconLeft={<Search className="size-4" />}>
+              {results.length > 0 ? 'Re-run research' : 'Research'}
+            </Button>
+          </div>
         </>
       }
     >
       <div className="space-y-4">
-        <div>
-          <Label htmlFor="research-query">What should I look for?</Label>
-          <Input
-            id="research-query"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="e.g. ICSE schools in Coimbatore"
-          />
-          <p className="mt-1.5 text-[10.5px] text-slate-400">
-            Approved sources only — school websites and public education directories. Emails and phone
-            numbers are never generated.
-          </p>
+        <div className="rounded-xl border border-line bg-slate-50/60 p-3.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-[11px] font-bold tracking-[0.08em] text-slate-400 uppercase">
+              <Filter className="size-3" />
+              School filters
+            </p>
+            <button
+              type="button"
+              onClick={() => setFilters(DEFAULT_FILTERS)}
+              className="text-[11px] font-semibold text-brand-600 hover:text-brand-500"
+            >
+              Reset
+            </button>
+          </div>
+
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <div>
+              <Label htmlFor="research-state">State</Label>
+              <Select
+                id="research-state"
+                value={filters.state}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    state: event.target.value,
+                    district: 'all',
+                  }))
+                }
+              >
+                <option value="all">All states</option>
+                {stateOptions.map((state) => (
+                  <option key={state} value={state}>
+                    {state}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="research-district">District</Label>
+              <Select
+                id="research-district"
+                value={filters.district}
+                onChange={(event) =>
+                  setFilters((current) => ({ ...current, district: event.target.value }))
+                }
+              >
+                <option value="all">All districts</option>
+                {districtOptions.map((district) => (
+                  <option key={district} value={district}>
+                    {district}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="research-board">Board</Label>
+              <Select
+                id="research-board"
+                value={filters.type}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    type: event.target.value as ResearchFilters['type'],
+                  }))
+                }
+              >
+                <option value="all">Any board</option>
+                {schoolTypes.map((schoolType) => (
+                  <option key={schoolType} value={schoolType}>
+                    {schoolType}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <Label htmlFor="research-query">Keywords</Label>
+            <Input
+              id="research-query"
+              value={filters.query}
+              onChange={(event) =>
+                setFilters((current) => ({ ...current, query: event.target.value }))
+              }
+              placeholder="e.g. international school, vidyalaya…"
+              iconLeft={<Search className="size-4" />}
+            />
+          </div>
+
+          <div className="mt-3">
+            <p className="text-[12.5px] font-semibold text-navy-900">Medium of school</p>
+            <div className="mt-0.5 divide-y divide-line">
+              <Toggle
+                checked={filters.mediums.includes('English')}
+                onChange={(next) =>
+                  setFilters((current) => ({ ...current, mediums: next ? ['English'] : [] }))
+                }
+                label="English medium schools only"
+                description="Outreach targets English-medium schools, so other language mediums are filtered out."
+              />
+            </div>
+          </div>
+
+          <div className="mt-1 divide-y divide-line">
+            <Toggle
+              checked={filters.minStudents > 0}
+              onChange={(next) =>
+                setFilters((current) => ({ ...current, minStudents: next ? 2000 : 0 }))
+              }
+              label="Only schools with more than 2,000 students"
+              description="Skips smaller campuses so outreach targets scale."
+            />
+            <Toggle
+              checked={filters.priorityReputation}
+              onChange={(next) =>
+                setFilters((current) => ({ ...current, priorityReputation: next }))
+              }
+              label="Prioritise reputed & well-established schools"
+              description="Sorts established and reputed schools to the top of the results."
+            />
+          </div>
         </div>
+
+        <p className="text-[11.5px] text-slate-500">
+          {describeFilters(filters)} —{' '}
+          <span className="font-semibold text-navy-800">{matchCount}</span> of{' '}
+          {researchResults.length} sources match
+        </p>
 
         {(running || results.length > 0) && (
           <div className="rounded-xl border border-line bg-slate-50/60 p-3">
@@ -980,20 +1401,22 @@ function ResearchModal({
                   <span
                     className={cn(
                       'flex size-4 items-center justify-center rounded-full ring-1',
-                      index < step || results.length > 0
+                      index < step || (!running && results.length > 0)
                         ? 'bg-teal-50 text-teal-600 ring-teal-200'
                         : index === step && running
                           ? 'bg-brand-50 text-brand-600 ring-brand-200'
                           : 'bg-white text-slate-300 ring-slate-200',
                     )}
                   >
-                    {index < step || results.length > 0 ? (
+                    {index < step || (!running && results.length > 0) ? (
                       <CheckCircle2 className="size-2.5" />
                     ) : (
                       <span className="size-1 rounded-full bg-current" />
                     )}
                   </span>
-                  <span className={cn('text-[11.5px]', index <= step ? 'text-navy-800' : 'text-slate-400')}>
+                  <span
+                    className={cn('text-[11.5px]', index <= step ? 'text-navy-800' : 'text-slate-400')}
+                  >
                     {label}
                   </span>
                 </div>
@@ -1002,71 +1425,149 @@ function ResearchModal({
           </div>
         )}
 
-        {results.length > 0 && (
+        {results.length > 0 ? (
           <div className="space-y-2">
-            <p className="text-[11px] font-bold tracking-[0.08em] text-slate-400 uppercase">
-              {results.length} results · duplicate check complete
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] font-bold tracking-[0.08em] text-slate-400 uppercase">
+                {results.length} results · {summary.verified} verified · {summary.partial} partial ·{' '}
+                {summary.unverified} unverified
+              </p>
+              <button
+                type="button"
+                onClick={() => toggleAll(!allSelected)}
+                disabled={selectableIds.length === 0}
+                className="text-[11px] font-semibold text-brand-600 hover:text-brand-500 disabled:text-slate-400"
+              >
+                {allSelected ? 'Clear selection' : `Select all (${selectableIds.length})`}
+              </button>
+            </div>
+
             {results.map((result) => {
-              const duplicate = existingSchools.find(
-                (school) => normalize(school.name) === normalize(result.name),
-              )
+              const duplicate = isDuplicate(result)
+              const checked = selectedIds.includes(result.id)
+              const checks = passedCheckCount(result)
               return (
-                <div key={result.id} className="rounded-xl border border-line p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-[12.5px] font-semibold text-navy-900">{result.name}</p>
-                      <p className="text-[10.5px] text-slate-400">
-                        {result.type} · {result.city} · {result.address}
-                      </p>
-                    </div>
-                    <ClassBadge className={verificationTone(result.verification)} size="sm">
-                      {result.verification === 'verified' ? 'Verified' : 'Needs review'}
-                    </ClassBadge>
-                  </div>
-                  <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                    <p className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                      <Mail className="size-3 text-slate-400" />
-                      {result.contactEmail}
-                    </p>
-                    <p className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                      <Phone className="size-3 text-slate-400" />
-                      {result.phone}
-                    </p>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
-                    <span className="truncate text-[10px] text-slate-400">
-                      <ExternalLink className="mr-1 inline size-2.5" />
-                      {result.source}
-                    </span>
+                <div
+                  key={result.id}
+                  className={cn(
+                    'rounded-xl border p-3 transition-colors',
+                    checked ? 'border-brand-300 bg-brand-50/40' : 'border-line',
+                  )}
+                >
+                  <div className="flex items-start gap-3">
                     {duplicate ? (
-                      <Badge tone="rose" size="sm">Already in records</Badge>
+                      <span
+                        aria-hidden
+                        className="mt-1 block size-4.5 rounded-[5px] border border-slate-200 bg-slate-50"
+                      />
                     ) : (
-                      <Button
-                        size="xs"
-                        variant="secondary"
-                        onClick={() =>
-                          pushToast({
-                            tone: 'info',
-                            title: 'Result saved to review queue',
-                            description: 'Saving to school records requires the backend write API.',
-                          })
-                        }
-                      >
-                        Save as lead
-                      </Button>
+                      <span className="pt-0.5">
+                        <Checkbox
+                          checked={checked}
+                          onChange={(next) => toggleSelected(result.id, next)}
+                          label={<span className="sr-only">Select {result.name}</span>}
+                        />
+                      </span>
                     )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-semibold text-navy-900">{result.name}</p>
+                          <p className="mt-0.5 text-[11px] text-slate-500">
+                            {result.type} · {result.city}, {result.district}, {result.state}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {duplicate && (
+                            <Badge tone="rose" size="sm">
+                              Already in records
+                            </Badge>
+                          )}
+                          <ClassBadge className={contactLabelTone(result.verification)} size="sm">
+                            {contactStatusLabel(result.verification)}
+                          </ClassBadge>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-600">
+                        <span className="flex items-center gap-1.5">
+                          <GraduationCap className="size-3 text-slate-400" />
+                          {result.studentCount.toLocaleString('en-IN')} students
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <Globe className="size-3 text-slate-400" />
+                          {displayMediums(result)}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          <BadgeCheck className="size-3 text-slate-400" />
+                          {result.reputation}
+                          {result.establishedYear ? ` · est. ${result.establishedYear}` : ''}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 rounded-lg bg-slate-50 p-2.5 ring-1 ring-line ring-inset">
+                        <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-navy-800">
+                          <UserRound className="size-3.5 text-slate-400" />
+                          {result.contactName}
+                          <span className="font-normal text-slate-500">
+                            · {result.contactDesignation}
+                          </span>
+                        </p>
+                        <div className="mt-1.5 grid gap-1 sm:grid-cols-2">
+                          <p className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                            <Mail className="size-3 text-slate-400" />
+                            {result.contactEmail || <span className="text-slate-400">No e-mail found</span>}
+                          </p>
+                          <p className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                            <Phone className="size-3 text-slate-400" />
+                            {result.phone || <span className="text-slate-400">No phone found</span>}
+                          </p>
+                          <p className="flex items-center gap-1.5 text-[11px] text-slate-600 sm:col-span-2">
+                            <MapPin className="size-3 text-slate-400" />
+                            {result.address}
+                          </p>
+                        </div>
+                        <p className="mt-1.5 text-[10.5px] text-slate-400">
+                          {checks} of 3 checks passed · {result.extractionNotes}
+                        </p>
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
+                        <a
+                          href={result.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="truncate text-[10.5px] font-semibold text-brand-600 hover:text-brand-500"
+                        >
+                          <ExternalLink className="mr-1 inline size-2.5" />
+                          {domainOf(result.sourceUrl)} · {result.extractionMethod}
+                        </a>
+                        <span className="text-[10px] text-slate-400">{result.source}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )
             })}
+
             <div className="rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200 ring-inset">
               <p className="flex items-start gap-2 text-[11px] leading-relaxed text-amber-800">
                 <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-                Research results are demonstration data. Live research calls the configured approved
-                sources from the backend and records the source for every field.
+                Demonstration corpus — contact details are never generated. Verification is derived
+                from format checks and whether the e-mail domain belongs to the school's own
+                website, and every result links the exact page it was read from.
               </p>
             </div>
+          </div>
+        ) : running ? null : (
+          <div className="rounded-xl border border-dashed border-line p-5 text-center">
+            <Sparkles className="mx-auto size-5 text-slate-300" />
+            <p className="mt-2 text-[12.5px] font-semibold text-navy-800">
+              {matchCount} schools match your filters
+            </p>
+            <p className="mt-0.5 text-[11.5px] text-slate-500">
+              Run research to visit each official website, extract contacts and verify them.
+            </p>
           </div>
         )}
       </div>

@@ -97,7 +97,7 @@ export function AgentPage() {
   const [historyOpen, setHistoryOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const startedRef = useRef(false)
+  const lastStartKey = useRef<string | null>(null)
   const isNearBottomRef = useRef(true)
   // Set to true when user sends a message or clicks a card option so that every
   // subsequent message in that agent response sequence forces a scroll down,
@@ -140,17 +140,22 @@ export function AgentPage() {
   })
 
   useEffect(() => {
-    if (startedRef.current) return
+    // Start the right workflow for the URL: a school carried from the Schools
+    // page pre-loads that record (contact, e-mail and phone) immediately.
     const mode = params.get('mode')
-    if (mode === 'existing') {
-      startedRef.current = true
+    const schoolId = params.get('school')
+    const key = schoolId ? `school:${schoolId}` : mode ? `mode:${mode}` : null
+    if (!key || key === lastStartKey.current) return
+    lastStartKey.current = key
+    if (schoolId) {
+      void agent.chooseExistingSchool(schoolId)
+    } else if (mode === 'existing') {
       void agent.startExisting()
     } else if (mode === 'research') {
-      startedRef.current = true
       void agent.startResearch()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [params])
 
   useEffect(() => {
     if (isNearBottomRef.current || forceNextScrollRef.current) {

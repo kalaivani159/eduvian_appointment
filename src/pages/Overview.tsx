@@ -27,12 +27,8 @@ import { Donut, TrendChart, ProgressBar } from '../components/ui/Charts'
 import { Avatar, EmptyState } from '../components/ui/Avatar'
 import { UserChip } from '../components/layout/Topbar'
 import { useApp } from '../store/AppStore'
-import {
-  pipelineCounts,
-  responseSplit,
-  schoolById,
-  trend,
-} from '../data/demo'
+import { responseSplit, trend } from '../data/demo'
+import { pipelineCountsFor } from '../lib/pipeline'
 import {
   appointmentStatusTone,
   cn,
@@ -44,9 +40,12 @@ import {
 } from '../lib/utils'
 
 export function Overview() {
-  const { user, isAdmin, appointments, followUps, approvals, notifications, employees } = useApp()
+  const { user, isAdmin, appointments, followUps, approvals, notifications, employees, schools, schoolById } =
+    useApp()
 
   if (!user) return null
+  // Pipeline snapshot derived from the live school records (never fixed values).
+  const pipeline = pipelineCountsFor(schools)
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
   const firstName = user.name.split(' ')[0]
@@ -560,12 +559,12 @@ export function Overview() {
             icon={<GraduationCap className="size-4.5" />}
           />
           <CardBody className="space-y-3">
-            {pipelineCounts.slice(0, 7).map((stage) => (
+            {pipeline.slice(0, 7).map((stage) => (
               <MetricRow
                 key={stage.stage}
                 label={stage.stage}
                 value={stage.count}
-                total={18}
+                total={Math.max(1, ...pipeline.map((item) => item.count))}
                 tone={
                   stage.stage.includes('Confirmed') || stage.stage.includes('Completed')
                     ? 'teal'

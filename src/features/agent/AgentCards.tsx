@@ -9,6 +9,8 @@ import {
   Check,
   CheckCircle2,
   Clock3,
+  ExternalLink,
+  Globe,
   GraduationCap,
   Mail,
   MapPin,
@@ -32,7 +34,15 @@ import type {
   SummaryStatus,
   TimeSlot,
 } from '../../lib/types'
-import { employeeById, schoolById } from '../../data/demo'
+import { employeeById } from '../../data/demo'
+import { useApp } from '../../store/AppStore'
+import {
+  contactLabelTone,
+  contactStatusLabel,
+  displayMediums,
+  domainOf,
+  passedCheckCount,
+} from '../../lib/research'
 import {
   cn,
   isValidEmail,
@@ -47,6 +57,8 @@ import { Button } from '../../components/ui/Button'
 import { ClassBadge, DemoTag } from '../../components/ui/Badge'
 import { Input, Label, Select, Textarea } from '../../components/ui/Field'
 import { Modal } from '../../components/ui/Modal'
+import { InvitationEmailPreview } from '../../components/invitation/InvitationEmailPreview'
+import { draftInvitationDetails } from '../../lib/invitationTemplate'
 
 export interface AgentCardHandlers {
   onStartExisting: () => void
@@ -130,6 +142,7 @@ export function AgentCardView({ card, handlers }: { card: AgentCard; handlers: H
 }
 
 function AgentCardInner({ card, handlers }: { card: AgentCard; handlers: Handlers }) {
+  const { schoolById } = useApp()
   switch (card.kind) {
     case 'workflow-choice':
       return (
@@ -425,6 +438,19 @@ function AgentCardInner({ card, handlers }: { card: AgentCard; handlers: Handler
           </div>
           <div className="p-3">
             <SummaryGrid draft={card.draft} />
+            <div className="mt-2.5">
+              <p className="mb-1.5 flex items-center gap-1 text-[10px] font-bold tracking-[0.08em] text-slate-400 uppercase">
+                <Mail className="size-3" />
+                Email preview · standard template
+              </p>
+              <InvitationEmailPreview
+                compact
+                scrollable
+                to={card.draft.contactEmail}
+                details={draftInvitationDetails(card.draft)}
+                appointmentId={card.appointmentId}
+              />
+            </div>
             <div className="mt-2.5 rounded-lg bg-slate-50 p-2.5 ring-1 ring-line ring-inset">
               <p className="text-[10.5px] leading-relaxed text-slate-500">
                 This invitation is saved as{' '}
@@ -468,6 +494,19 @@ function AgentCardInner({ card, handlers }: { card: AgentCard; handlers: Handler
             <p className="mt-2.5 rounded-lg bg-teal-50/60 px-2.5 py-2 text-[10.5px] leading-relaxed text-teal-900 ring-1 ring-teal-200 ring-inset">
               {card.detail}
             </p>
+            <div className="mt-2.5">
+              <p className="mb-1.5 flex items-center gap-1 text-[10px] font-bold tracking-[0.08em] text-slate-400 uppercase">
+                <Mail className="size-3" />
+                Email preview · standard template
+              </p>
+              <InvitationEmailPreview
+                compact
+                scrollable
+                to={card.draft.contactEmail}
+                details={draftInvitationDetails(card.draft)}
+                appointmentId={card.appointmentId}
+              />
+            </div>
             {card.appointmentId && (
               <Link
                 to={`/appointments/${card.appointmentId}`}
@@ -554,6 +593,7 @@ function ResearchCard({
   onSelect: (id: string) => void
   onVerify: (id: string) => void
 }) {
+  const checks = passedCheckCount(result)
   return (
     <div
       className={cn(
@@ -572,16 +612,28 @@ function ResearchCard({
             )}
           </p>
           <p className="mt-0.5 text-[10.5px] text-slate-400">
-            {result.type} · {result.city}
+            {result.type} · {result.city}, {result.district}, {result.state}
           </p>
         </div>
-        <ClassBadge className={verificationTone(result.verification)} size="sm">
-          {result.verification === 'verified'
-            ? 'Verified'
-            : result.verification === 'needs-review'
-              ? 'Needs review'
-              : 'Unverified'}
+        <ClassBadge className={contactLabelTone(result.verification)} size="sm">
+          {contactStatusLabel(result.verification)}
         </ClassBadge>
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10.5px] text-slate-600">
+        <span className="flex items-center gap-1">
+          <GraduationCap className="size-3 text-slate-400" />
+          {result.studentCount.toLocaleString('en-IN')} students
+        </span>
+        <span className="flex items-center gap-1">
+          <Globe className="size-3 text-slate-400" />
+          {displayMediums(result)}
+        </span>
+        <span className="flex items-center gap-1">
+          <BadgeCheck className="size-3 text-slate-400" />
+          {result.reputation}
+          {result.establishedYear ? ` · est. ${result.establishedYear}` : ''}
+        </span>
       </div>
 
       <div className="mt-2 space-y-1">
@@ -597,10 +649,27 @@ function ResearchCard({
           <Mail className="size-3 text-slate-400" />
           {result.contactEmail || <span className="text-rose-500">Not found — do not guess</span>}
         </p>
+        <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+          <Phone className="size-3 text-slate-400" />
+          {result.phone || <span className="text-rose-500">Not found — do not guess</span>}
+        </p>
       </div>
 
+      <p className="mt-1.5 text-[10px] text-slate-400">
+        {checks} of 3 checks passed · {result.extractionNotes}
+      </p>
+
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
-        <span className="truncate text-[9.5px] text-slate-400">{result.source}</span>
+        <a
+          href={result.sourceUrl}
+          target="_blank"
+          rel="noreferrer"
+          title={result.source}
+          className="truncate text-[9.5px] font-semibold text-brand-600 hover:text-brand-500"
+        >
+          <ExternalLink className="mr-1 inline size-2.5" />
+          {domainOf(result.sourceUrl)} · {result.extractionMethod}
+        </a>
         <div className="flex items-center gap-1.5">
           {result.verification !== 'verified' && (
             <Button
@@ -790,6 +859,7 @@ function ContactFormCard({
 }
 
 function SummaryGrid({ draft }: { draft: AppointmentDraft }) {
+  const { schoolById } = useApp()
   const school = schoolById(draft.schoolId)
   const employee = employeeById(draft.employeeId)
   const online = draft.format === 'Online'

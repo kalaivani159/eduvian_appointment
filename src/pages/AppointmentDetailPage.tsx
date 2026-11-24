@@ -9,8 +9,10 @@ import {
   Clock3,
   Copy,
   ExternalLink,
+  Lock,
   Mail,
   MapPin,
+  Pencil,
   Phone,
   RotateCcw,
   Send,
@@ -28,9 +30,17 @@ import { Modal } from '../components/ui/Modal'
 import { Input, Label, Select, Textarea } from '../components/ui/Field'
 import { EmptyState } from '../components/ui/Avatar'
 import { UserChip } from '../components/layout/Topbar'
+import { InvitationEmailPreview } from '../components/invitation/InvitationEmailPreview'
 import { useApp } from '../store/AppStore'
-import { employeeById, schoolById } from '../data/demo'
+import { employeeById } from '../data/demo'
 import { generateSlots, suggestDates, validateDate } from '../lib/scheduling'
+import {
+  appointmentInvitationDetails,
+  composeInvitationBody,
+  INVITATION_INTRO_PARAGRAPHS,
+  INVITATION_SUBJECT,
+} from '../lib/invitationTemplate'
+import type { Appointment, AppointmentFormat } from '../lib/types'
 import {
   appointmentStatusTone,
   cn,
@@ -47,11 +57,20 @@ import {
 export function AppointmentDetailPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
-  const { appointments, cancelAppointment, rescheduleAppointment, updateAppointmentStatus, pushToast } = useApp()
+  const {
+    appointments,
+    cancelAppointment,
+    rescheduleAppointment,
+    updateAppointmentDetails,
+    updateAppointmentStatus,
+    pushToast,
+    schoolById,
+  } = useApp()
   const appointment = appointments.find((item) => item.id === id)
   const [rescheduleOpen, setRescheduleOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
   const [outcomeOpen, setOutcomeOpen] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   if (!appointment) {
     return (
@@ -182,7 +201,7 @@ export function AppointmentDetailPage() {
           <Card>
             <CardHeader
               title="Invitation email"
-              subtitle="The email contains the proposed appointment details only — no sales introduction"
+              subtitle="Standard Eduvian introduction and meeting purpose — appointment details auto-filled from this record"
               icon={<Mail className="size-4.5" />}
               action={
                 <Badge tone={appointment.emailStatus === 'Failed' ? 'rose' : 'brand'} size="sm" dot>
@@ -191,90 +210,55 @@ export function AppointmentDetailPage() {
               }
             />
             <CardBody>
-              <div className="overflow-hidden rounded-xl border border-line">
-                <div className="space-y-1 border-b border-line bg-slate-50/70 px-4 py-2.5">
-                  <p className="text-[11px] text-slate-500">
-                    <span className="font-semibold text-navy-800">From:</span> appointments@eduvian.in
-                  </p>
-                  <p className="text-[11px] text-slate-500">
-                    <span className="font-semibold text-navy-800">To:</span>{' '}
-                    {appointment.contactEmail || <span className="text-rose-500">not verified</span>}
-                  </p>
-                  <p className="text-[11px] text-slate-500">
-                    <span className="font-semibold text-navy-800">Subject:</span> Appointment request ·{' '}
-                    {weekdayDate(appointment.date)} at {timeLabel(appointment.startTime)} IST
-                  </p>
-                </div>
-                <div className="space-y-3 px-4 py-4 text-[12.5px] leading-relaxed text-slate-700">
-                  <p>Dear {appointment.contactName},</p>
-                  <p>
-                    I am writing from Eduvian Solutions to confirm whether the following appointment
-                    would be convenient for you.
-                  </p>
-                  <div className="rounded-lg bg-slate-50 p-3 text-[12px] ring-1 ring-line ring-inset">
-                    <p>
-                      <strong className="font-semibold text-navy-900">Date:</strong>{' '}
-                      {longDate(appointment.date)}
-                    </p>
-                    <p>
-                      <strong className="font-semibold text-navy-900">Time:</strong>{' '}
-                      {timeRange(appointment.startTime, appointment.endTime)} IST
-                    </p>
-                    <p>
-                      <strong className="font-semibold text-navy-900">Duration:</strong> 30 minutes
-                    </p>
-                    <p>
-                      <strong className="font-semibold text-navy-900">Format:</strong> {appointment.format}
-                    </p>
-                    <p>
-                      <strong className="font-semibold text-navy-900">
-                        {appointment.format === 'Online' ? 'Meeting link' : 'Location'}:
-                      </strong>{' '}
-                      {appointment.location}
-                    </p>
-                    <p>
-                      <strong className="font-semibold text-navy-900">Representative:</strong>{' '}
-                      {owner?.name} · {owner?.phone}
-                    </p>
-                  </div>
-                  <p>
-                    Please let us know whether this time works for you. You can confirm, tell us you are
-                    unavailable, or ask for another time using the buttons below — no account or login is
-                    needed.
-                  </p>
-                  <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-line p-2.5">
-                    {[
-                      { label: 'Confirm this time', to: `/invite/demo-${appointment.id}`, tone: 'bg-teal-600 text-white' },
-                      { label: 'Not available', to: `/invite/demo-${appointment.id}?choice=unavailable`, tone: 'bg-white text-navy-800 ring-1 ring-line' },
-                      { label: 'Request another time', to: `/invite/demo-${appointment.id}?choice=another`, tone: 'bg-white text-navy-800 ring-1 ring-line' },
-                    ].map((option) => (
-                      <Link
-                        key={option.label}
-                        to={option.to}
-                        className={cn(
-                          'rounded-lg px-3 py-1.5 text-[11.5px] font-semibold transition-opacity hover:opacity-90',
-                          option.tone,
-                        )}
-                      >
-                        {option.label}
-                      </Link>
-                    ))}
-                  </div>
-                  <p className="text-slate-500">
-                    Warm regards,
-                    <br />
-                    <strong className="font-semibold text-navy-900">{owner?.name}</strong>
-                    <br />
-                    {owner?.designation} · Eduvian Solutions
-                  </p>
-                </div>
-              </div>
+              <p className="mb-2 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-slate-400">
+                <Lock className="mt-0.5 size-3.5 shrink-0" />
+                The company introduction and meeting purpose are fixed template content. Only the
+                appointment details below can be edited.
+              </p>
+              <InvitationEmailPreview
+                to={appointment.contactEmail}
+                details={appointmentInvitationDetails(appointment, school?.name)}
+                appointmentId={appointment.id}
+              />
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
                   <ShieldCheck className="size-3.5" />
                   Secure single-use response links · they expire with the invitation
                 </p>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    iconLeft={<Pencil className="size-3" />}
+                    onClick={() => setDetailsOpen(true)}
+                  >
+                    Edit details
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="secondary"
+                    iconLeft={<Copy className="size-3" />}
+                    onClick={() => {
+                      const details = appointmentInvitationDetails(appointment, school?.name)
+                      const link = `${window.location.origin}/invite/demo-${appointment.id}`
+                      navigator.clipboard.writeText(composeInvitationBody(details, link)).then(
+                        () =>
+                          pushToast({
+                            tone: 'success',
+                            title: 'Invitation email copied',
+                            description: 'The full standard template was copied to the clipboard.',
+                          }),
+                        () =>
+                          pushToast({
+                            tone: 'info',
+                            title: 'Copy unavailable',
+                            description: 'Your browser blocked clipboard access.',
+                          }),
+                      )
+                    }}
+                  >
+                    Copy email
+                  </Button>
                   <Button
                     size="xs"
                     variant="secondary"
@@ -308,6 +292,10 @@ export function AppointmentDetailPage() {
                   </Link>
                 </div>
               </div>
+              <p className="mt-2 text-[10.5px] leading-relaxed text-slate-400">
+                Preview before sending — nothing is delivered until the email provider reports
+                Connected.
+              </p>
             </CardBody>
           </Card>
 
@@ -489,6 +477,24 @@ export function AppointmentDetailPage() {
         }}
       />
 
+      {detailsOpen && (
+        <EditInvitationDetailsModal
+          appointment={appointment}
+          schoolName={school?.name ?? ''}
+          onClose={() => setDetailsOpen(false)}
+          onSave={(patch) => {
+            updateAppointmentDetails(appointment.id, patch)
+            setDetailsOpen(false)
+            pushToast({
+              tone: 'success',
+              title: 'Invitation details updated',
+              description:
+                'The appointment record now shows the new details — the standard introduction is unchanged.',
+            })
+          }}
+        />
+      )}
+
       <CancelModal
         open={cancelOpen}
         onClose={() => setCancelOpen(false)}
@@ -525,6 +531,142 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="text-[11px] text-slate-500">{label}</span>
       <span className="text-[11px] font-medium text-navy-900">{value}</span>
     </div>
+  )
+}
+
+/**
+ * Edits only the appointment-specific detail fields shown in the invitation.
+ * The company introduction, meeting purpose, response options and closing are
+ * fixed template content, displayed here as locked reference — never editable.
+ */
+function EditInvitationDetailsModal({
+  appointment,
+  schoolName,
+  onClose,
+  onSave,
+}: {
+  appointment: Appointment
+  schoolName: string
+  onClose: () => void
+  onSave: (
+    patch: Pick<Appointment, 'date' | 'startTime' | 'endTime' | 'format' | 'location'>,
+  ) => void
+}) {
+  const { schedulingPolicy } = useApp()
+  const [date, setDate] = useState(appointment.date)
+  const [start, setStart] = useState(appointment.startTime)
+  const [end, setEnd] = useState(appointment.endTime)
+  const [format, setFormat] = useState<AppointmentFormat>(appointment.format)
+  const [location, setLocation] = useState(appointment.location)
+  const [error, setError] = useState('')
+
+  function save() {
+    if (!date) {
+      setError('Choose the proposed date.')
+      return
+    }
+    if (!start || !end) {
+      setError('Enter both the proposed start and end time.')
+      return
+    }
+    if (end <= start) {
+      setError('The proposed end time must be after the start time.')
+      return
+    }
+    if (!location.trim()) {
+      setError('Enter the meeting location or link.')
+      return
+    }
+    setError('')
+    onSave({ date, startTime: start, endTime: end, format, location: location.trim() })
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Edit invitation details"
+      description="Only the appointment-specific fields below change — the standard introduction stays fixed."
+      footer={
+        <>
+          <Button variant="secondary" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={save} iconLeft={<Check className="size-3.5" />}>
+            Save details
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="rounded-xl bg-slate-50 p-3 ring-1 ring-line ring-inset">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-navy-900">
+            <Lock className="size-3.5 text-slate-400" />
+            Fixed template content — locked
+          </p>
+          <p className="mt-1.5 text-[11.5px] text-slate-600">
+            <span className="font-semibold text-navy-800">Subject:</span> {INVITATION_SUBJECT}
+          </p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-slate-600">
+            {INVITATION_INTRO_PARAGRAPHS.slice(0, 2).join(' ')} The company introduction, meeting
+            purpose, response options and closing are shared by every invitation and cannot be
+            edited here.
+          </p>
+        </div>
+
+        <div>
+          <Label>School Name</Label>
+          <Input value={schoolName} disabled />
+          <p className="mt-1 text-[10.5px] text-slate-400">
+            Taken from the school record — rename it on the school page.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Proposed Date</Label>
+            <Input
+              type="date"
+              value={date}
+              min={isoDay(0)}
+              max={isoDay(schedulingPolicy.maxAdvanceDays)}
+              onChange={(event) => setDate(event.target.value)}
+            />
+          </div>
+          <div>
+            <Label>Meeting Mode</Label>
+            <Select
+              value={format}
+              onChange={(event) => setFormat(event.target.value as AppointmentFormat)}
+            >
+              <option value="In-person">In-person</option>
+              <option value="Online">Online</option>
+            </Select>
+          </div>
+          <div>
+            <Label>Proposed start time</Label>
+            <Input type="time" value={start} onChange={(event) => setStart(event.target.value)} />
+          </div>
+          <div>
+            <Label>Proposed end time</Label>
+            <Input type="time" value={end} onChange={(event) => setEnd(event.target.value)} />
+          </div>
+        </div>
+
+        <div>
+          <Label>Meeting Location / Link</Label>
+          <Input
+            value={location}
+            onChange={(event) => setLocation(event.target.value)}
+            placeholder={
+              format === 'Online' ? 'Meeting link or platform' : 'School address for the visit'
+            }
+          />
+        </div>
+
+        {error && <p className="text-[11.5px] text-rose-600">{error}</p>}
+      </div>
+    </Modal>
   )
 }
 

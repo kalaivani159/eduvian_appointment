@@ -200,20 +200,57 @@ export interface ApprovalRequest {
   decisionNote?: string
 }
 
+export type MediumOfInstruction =
+  | 'English'
+  | 'Tamil'
+  | 'Hindi'
+  | 'Telugu'
+  | 'Kannada'
+  | 'Malayalam'
+  | 'Marathi'
+  | 'Bengali'
+  | 'Gujarati'
+  | 'Odia'
+  | 'Punjabi'
+
+/**
+ * Reputation is derived from how long a school has been operating and how
+ * consistently it appears across the sources that were checked — it is never
+ * invented as a score.
+ */
+export type ReputationTier = 'Established' | 'Reputed' | 'Emerging'
+
 export interface ResearchResult {
   id: string
   name: string
   type: SchoolType
+  state: string
+  district: string
   city: string
   address: string
+  /** Languages the school actually teaches in, as recorded on its site. */
+  medium: MediumOfInstruction[]
+  studentCount: number
+  establishedYear: number | null
+  reputation: ReputationTier
   website: string
+  /** The exact page the contact details were read from. */
+  sourceUrl: string
+  /** How the contact block was located on the page. */
+  extractionMethod: 'Contact page' | 'About page' | 'Footer' | 'Public directory' | 'Home page'
   email: string
   phone: string
   contactName: string
   contactDesignation: SchoolContact['designation']
   contactEmail: string
   source: string
+  /**
+   * Derived from `verifyContactExtraction()` — format validity plus whether the
+   * address actually belongs to the school's own domain.
+   */
   verification: VerificationStatus
+  /** Free-text record of what was and was not found during extraction. */
+  extractionNotes: string
   duplicateOf?: string
   selected: boolean
 }

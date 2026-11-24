@@ -8,14 +8,16 @@ import type {
   AgentMessage,
   AppointmentDraft,
   AppointmentFormat,
+  ResearchResult,
+  School,
 } from '../../lib/types'
+import { DEMO_EMPLOYEE_ID, researchResults } from '../../data/demo'
 import {
-  DEMO_EMPLOYEE_ID,
-  registerResearchSchool,
-  researchResults,
-  schoolById,
-  schools,
-} from '../../data/demo'
+  describeFilters,
+  filterResearchSchools,
+  parseFiltersFromQuery,
+  sortResearchSchools,
+} from '../../lib/research'
 import {
   describeWorkingDays,
   endTimeFor,
@@ -109,8 +111,6 @@ const emptyContext: AgentContext = {
   pendingContact: null,
 }
 
-const EXISTING_SCHOOL_IDS = ['sch-1', 'sch-2', 'sch-3', 'sch-5', 'sch-8']
-
 const greeting = (): AgentMessage => ({
   id: 'msg-greeting',
   from: 'agent',
@@ -176,7 +176,7 @@ function distinctiveTokens(name: string) {
     .filter((token) => token.length >= 3 && !GENERIC_SCHOOL_WORDS.has(token))
 }
 
-function findSchoolInText(text: string) {
+function findSchoolInText(text: string, schools: School[]) {
   const lower = text.toLowerCase()
   const exact = schools.find((school) => lower.includes(school.name.toLowerCase()))
   if (exact) return exact
@@ -188,16 +188,19 @@ function findSchoolInText(text: string) {
   )
 }
 
-function findResearchInText(text: string) {
+function findResearchInText(text: string, preferred: ResearchResult[] = researchResults) {
   const lower = text.toLowerCase()
-  const exact = researchResults.find((result) => lower.includes(result.name.toLowerCase()))
-  if (exact) return exact
-  const tokens = new Set(lower.split(/[^a-z0-9]+/).filter(Boolean))
-  return (
-    researchResults.find((result) =>
-      distinctiveTokens(result.name).some((token) => tokens.has(token)),
-    ) ?? null
-  )
+  const search = (list: ResearchResult[]) => {
+    const exact = list.find((result) => lower.includes(result.name.toLowerCase()))
+    if (exact) return exact
+    const tokens = new Set(lower.split(/[^a-z0-9]+/).filter(Boolean))
+    return (
+      list.find((result) => distinctiveTokens(result.name).some((token) => tokens.has(token))) ??
+      null
+    )
+  }
+  // The results actually on screen win; anything else in the corpus still matches.
+  return search(preferred) ?? (preferred === researchResults ? null : search(researchResults))
 }
 
 function parseContactDetails(text: string): Partial<PendingContact> {
@@ -256,6 +259,9 @@ export function useAgentDemo() {
     requestApproval,
     schedulingPolicy,
     user,
+    schools,
+    schoolById,
+    registerResearchSchool,
   } = useApp()
 
   const [messages, setMessages] = useState<AgentMessage[]>([greeting()])
@@ -265,6 +271,10 @@ export function useAgentDemo() {
 
   const contextRef = useRef<AgentContext>(emptyContext)
   const busy = useRef(false)
+  /** The result set currently shown in the chat, so ordinals stay correct. */
+  const lastResearchResults = useRef<ResearchResult[]>(researchResults)
+  /** The school ids last shown in the "existing schools" card (ordinal picks). */
+  const existingSchoolIds = useRef<string[]>([])
   const policyRef = useRef(schedulingPolicy)
   policyRef.current = schedulingPolicy
   const appointmentsRef = useRef(appointments)
@@ -1217,22 +1227,34 @@ export function useAgentDemo() {
   ) {
     if (busy.current) return
     const school = schools.find((item) => item.id === schoolId)
-    if (!school) return
+    if (!school) {
+      push({
+        from: 'agent',
+        text: 'I could not find that school in your records. Pick one from the list, or research a new school first.',
+      })
+      return
+    }
     busy.current = true
     try {
+      // Pre-fill the primary contact so the school, contact, e-mail and phone
+      // are all loaded before the employee picks a date — no re-selection.
+      const primaryContact =
+        school.contacts.find((item) => item.verification === 'verified' && item.email.trim()) ??
+        school.contacts[0] ??
+        null
       updateContext({
         workflow: 'existing',
         stage: 'awaiting-date',
         schoolId: school.id,
         schoolName: school.name,
         schoolCity: `${school.city}, ${school.state}`,
-        contactId: null,
-        contactName: null,
-        contactDesignation: null,
-        contactEmail: null,
-        contactPhone: null,
-        contactVerified: null,
-        contactSource: null,
+        contactId: primaryContact?.id ?? null,
+        contactName: primaryContact?.name ?? null,
+        contactDesignation: primaryContact?.designation ?? null,
+        contactEmail: primaryContact?.email ?? null,
+        contactPhone: primaryContact?.phone ?? null,
+        contactVerified: primaryContact ? primaryContact.verification === 'verified' : null,
+        contactSource: primaryContact ? 'record' : null,
         date: null,
         startTime: null,
         endTime: null,
@@ -1250,13 +1272,31 @@ export function useAgentDemo() {
         text: `${school.name} · ${school.address}`,
         meta: 'school.address',
       })
+      if (primaryContact) {
+        push({
+          from: 'system',
+          text: `${primaryContact.name} · ${primaryContact.designation} · ${
+            primaryContact.email || 'no e-mail on record'
+          } · ${primaryContact.phone || 'no phone on record'}`,
+          meta: 'school.contact',
+        })
+      }
 
       if (prefill?.date) {
         await handleDateSelection(prefill.date, prefill.time)
         return
       }
+      const contactNote = primaryContact
+        ? ` I've pre-filled ${primaryContact.name} (${primaryContact.designation}) — ${
+            primaryContact.email || 'no e-mail on record'
+          } · ${primaryContact.phone || 'no phone on record'}${
+            school.contacts.length > 1
+              ? '; you can switch contacts before we confirm'
+              : ''
+          }.`
+        : ''
       await askForDate(
-        `I have ${school.name} in your records. The verified visit address is ${school.address}. Which date works for the appointment? I'll validate the date before showing any times.`,
+        `I have ${school.name} in your records.${contactNote} The verified visit address is ${school.address}. Which date works for the appointment? I'll validate the date before showing any times.`,
       )
     } finally {
       busy.current = false
@@ -1377,6 +1417,20 @@ export function useAgentDemo() {
     busy.current = true
     try {
       setThinking(true)
+      const filters = parseFiltersFromQuery(query, researchResults)
+      const matched = sortResearchSchools(
+        filterResearchSchools(researchResults, filters),
+        filters.priorityReputation,
+      )
+      // “Show unverified contacts only” narrows to contacts still needing work.
+      const needsVerificationOnly = /(unverified|needs? verification|not verified|partially verified|needs review)/.test(
+        query.toLowerCase(),
+      )
+      const shown = needsVerificationOnly
+        ? matched.filter((result) => result.verification !== 'verified')
+        : matched
+      const label = describeFilters(filters)
+
       updateContext({
         ...emptyContext,
         workflow: 'research',
@@ -1386,29 +1440,65 @@ export function useAgentDemo() {
       setThinking(false)
       push({
         from: 'system',
-        text: 'Research started · approved sources only',
+        text: `Research started · ${label}`,
         meta: 'search_new_schools()',
       })
       await sleep(550)
       push({
         from: 'system',
-        text: 'Checked existing records for duplicates',
-        meta: 'check_duplicate_school()',
+        text: `Ranked ${shown.length} official school websites against the filters`,
+        meta: 'rank_school_websites()',
       })
       await sleep(550)
       push({
         from: 'system',
-        text: 'Retrieved official contact details for 5 schools',
+        text: `Visited ${shown.length} official websites and extracted contact blocks`,
         meta: 'identify_school_contacts()',
       })
       await sleep(500)
+      push({
+        from: 'system',
+        text: 'Validated e-mail format, phone format and e-mail domain against the website',
+        meta: 'verify_contact_details()',
+      })
+      await sleep(450)
+      push({
+        from: 'system',
+        text: 'Checked existing records for duplicates',
+        meta: 'check_duplicate_school()',
+      })
+
+      lastResearchResults.current = shown
       updateContext({ stage: 'awaiting-school' })
+
+      if (shown.length === 0) {
+        push({
+          from: 'agent',
+          text: `No schools matched ${label}. Relax a filter and I will search again — for example “English medium schools over 2000 students”.`,
+        })
+        setPromptChips([
+          'Research all schools',
+          'Find CBSE schools in Tamil Nadu',
+          'Find English medium schools over 2000 students',
+        ])
+        return
+      }
+
+      const needing = shown.filter((result) => result.verification !== 'verified').length
       push({
         from: 'agent',
-        text: `I found 5 schools matching “${query}”. Two contacts still need verification before an invitation can be prepared. Which school would you like to book?`,
-        card: { kind: 'school-results', results: researchResults },
+        text: `I found ${shown.length} school${shown.length === 1 ? '' : 's'} matching “${label}”. ${
+          needing > 0
+            ? `${needing} contact${needing === 1 ? '' : 's'} still need${needing === 1 ? 's' : ''} verification before an invitation can be prepared.`
+            : 'Every contact passed verification, so outreach can be prepared once you pick one.'
+        } Which school would you like to book?`,
+        card: { kind: 'school-results', results: shown },
       })
-      setPromptChips(['The third one', 'Sri Chaitanya Vidyalaya', 'Show unverified contacts only'])
+      setPromptChips(
+        shown.length >= 3
+          ? ['The third one', shown[2].name, 'Show unverified contacts only']
+          : [shown[0].name, 'Show unverified contacts only'],
+      )
     } finally {
       busy.current = false
     }
@@ -1422,16 +1512,14 @@ export function useAgentDemo() {
       updateContext({ ...emptyContext, workflow: 'existing', stage: 'awaiting-school' })
       await sleep(450)
       setThinking(false)
+      const ids = schools.map((school) => school.id)
+      existingSchoolIds.current = ids
       push({
         from: 'agent',
         text: "Here are the existing schools in your records. Pick the one you'd like to meet — I won't research these again because their details are already on file.",
-        card: { kind: 'existing-schools', schoolIds: EXISTING_SCHOOL_IDS },
+        card: { kind: 'existing-schools', schoolIds: ids },
       })
-      setPromptChips([
-        'ABC International School',
-        'Greenwood Public School',
-        'Sri Vidhya Matriculation School',
-      ])
+      setPromptChips(schools.slice(0, 3).map((school) => school.name))
     } finally {
       busy.current = false
     }
@@ -1625,32 +1713,36 @@ export function useAgentDemo() {
     if (current.stage === 'awaiting-school') {
       const index = ordinalIndex(lower)
       if (current.workflow === 'research') {
-        if (index !== null && researchResults[index]) {
-          await chooseResearchResult(researchResults[index].id)
+        const shown = lastResearchResults.current
+        if (index !== null && shown[index]) {
+          await chooseResearchResult(shown[index].id)
           return
         }
-        const result = findResearchInText(value)
+        const result = findResearchInText(value, shown)
         if (result) {
           await chooseResearchResult(result.id)
           return
         }
-        const existing = findSchoolInText(value)
+        const existing = findSchoolInText(value, schools)
         if (existing) {
           await chooseExistingSchool(existing.id)
           return
         }
         push({
           from: 'agent',
-          text: 'I could not match that to one of the five research results. Say “the third one” or use the school name shown in the card.',
+          text:
+            shown.length === 0
+              ? 'No research results are showing yet. Ask me to research schools first — for example “find CBSE schools in Chennai”.'
+              : `I could not match that to one of the ${shown.length} research results. Say “the first one” or use the school name shown in the card.`,
         })
         return
       }
 
-      if (index !== null && EXISTING_SCHOOL_IDS[index]) {
-        await chooseExistingSchool(EXISTING_SCHOOL_IDS[index])
+      if (index !== null && existingSchoolIds.current[index]) {
+        await chooseExistingSchool(existingSchoolIds.current[index])
         return
       }
-      const existing = findSchoolInText(value)
+      const existing = findSchoolInText(value, schools)
       if (existing) {
         await chooseExistingSchool(existing.id)
         return
@@ -1695,7 +1787,7 @@ export function useAgentDemo() {
       }
     }
 
-    const namedSchool = findSchoolInText(value)
+    const namedSchool = findSchoolInText(value, schools)
     const date = parseDateInput(value)
     const time = parseTimeInput(value)
 
@@ -1704,7 +1796,7 @@ export function useAgentDemo() {
       return
     }
 
-    const namedResult = findResearchInText(value)
+    const namedResult = findResearchInText(value, lastResearchResults.current)
     if (namedResult) {
       await chooseResearchResult(namedResult.id, date ? { date, time } : undefined)
       return

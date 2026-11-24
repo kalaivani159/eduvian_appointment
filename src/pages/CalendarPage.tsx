@@ -32,7 +32,7 @@ import { SegmentedControl, Select } from '../components/ui/Field'
 import { Avatar, EmptyState } from '../components/ui/Avatar'
 import { UserChip } from '../components/layout/Topbar'
 import { useApp } from '../store/AppStore'
-import { employeeById, employees, schoolById } from '../data/demo'
+import { employeeById, employees } from '../data/demo'
 import {
   appointmentStatusTone,
   cn,
@@ -168,7 +168,7 @@ function statusStyle(av: DayAvailability, inMonth: boolean) {
 }
 
 export function CalendarPage() {
-  const { appointments, user, isAdmin, schedulingPolicy } = useApp()
+  const { appointments, user, isAdmin, schedulingPolicy, schoolById } = useApp()
   const navigate = useNavigate()
   const [view, setView] = useState<View>('month')
   const [cursor, setCursor] = useState(new Date())
@@ -707,6 +707,7 @@ function MonthCell({
   onClick: () => void
   onOpenAppointment: (id: string) => void
 }) {
+  const { schoolById } = useApp()
   const inMonth = isSameMonth(day, cursor)
   const style = statusStyle(availability, inMonth)
   const iso = format(day, 'yyyy-MM-dd')
@@ -715,10 +716,19 @@ function MonthCell({
   )
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
       onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onClick()
+        }
+      }}
       className={cn(
-        'min-h-[90px] w-full p-1.5 text-left transition-all',
+        'min-h-[90px] w-full cursor-pointer p-1.5 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500',
         inMonth ? style.cellBg : 'bg-slate-50/40',
         selected && 'ring-2 ring-inset ring-brand-500 bg-brand-50/70',
         inMonth && !selected && 'hover:ring-1 hover:ring-inset hover:ring-brand-300',
@@ -761,12 +771,13 @@ function MonthCell({
           <p className="px-1 text-[9px] text-slate-400">+{items.length - 2} more</p>
         )}
       </div>
-    </button>
+    </div>
   )
 }
 
 /* ─── Week/Day appointment chip ──────────────────────────────────────────── */
 function AppointmentChip({ appointment, onClick }: { appointment: Appointment; onClick: () => void }) {
+  const { schoolById } = useApp()
   const school = schoolById(appointment.schoolId)
   return (
     <button onClick={onClick}

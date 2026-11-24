@@ -1,4 +1,5 @@
 import { isoDay } from '../lib/utils'
+import { researchCorpus } from './researchCorpus'
 import type {
   Appointment,
   AppNotification,
@@ -828,89 +829,18 @@ export const approvals: ApprovalRequest[] = [
   },
 ]
 
-export const researchResults: ResearchResult[] = [
-  {
-    id: 'res-1',
-    name: 'Sunrise Vidya Mandir',
-    type: 'CBSE',
-    city: 'Chennai',
-    address: 'Besant Nagar, Chennai 600090',
-    website: 'https://sunrisevidyamandir.edu.in',
-    email: 'office@sunrisevidyamandir.edu.in',
-    phone: '+91 44 4280 1188',
-    contactName: 'Dr. R. Padmavathi',
-    contactDesignation: 'Principal',
-    contactEmail: 'principal@sunrisevidyamandir.edu.in',
-    source: 'School website · contact page',
-    verification: 'verified',
-    selected: false,
-  },
-  {
-    id: 'res-2',
-    name: 'Chennai Public Academy',
-    type: 'CBSE',
-    city: 'Chennai',
-    address: 'Porur, Chennai 600116',
-    website: 'https://chennaipublicacademy.edu.in',
-    email: 'info@chennaipublicacademy.edu.in',
-    phone: '+91 44 4218 7700',
-    contactName: 'S. Hariharan',
-    contactDesignation: 'Correspondent',
-    contactEmail: 'correspondent@chennaipublicacademy.edu.in',
-    source: 'Public school directory · cross-checked with website',
-    verification: 'verified',
-    selected: false,
-  },
-  {
-    id: 'res-3',
-    name: 'Sri Chaitanya Vidyalaya',
-    type: 'CBSE',
-    city: 'Chennai',
-    address: 'Adyar, Chennai 600020',
-    website: 'https://srichaitanyavidyalaya.edu.in',
-    email: 'office@srichaitanyavidyalaya.edu.in',
-    phone: '+91 44 2445 6612',
-    contactName: 'M. Bhuvaneswari',
-    contactDesignation: 'Principal',
-    contactEmail: 'principal@srichaitanyavidyalaya.edu.in',
-    source: 'School website · about page',
-    verification: 'needs-review',
-    selected: false,
-  },
-  {
-    id: 'res-4',
-    name: 'Sishya Global School',
-    type: 'International',
-    city: 'Chennai',
-    address: 'Thoraipakkam, Chennai 600097',
-    website: 'https://sishyaglobal.edu.in',
-    email: 'admissions@sishyaglobal.edu.in',
-    phone: '+91 44 4223 9900',
-    contactName: 'A. Deepak',
-    contactDesignation: 'Director',
-    contactEmail: 'director@sishyaglobal.edu.in',
-    source: 'School website · leadership page',
-    verification: 'unverified',
-    selected: false,
-  },
-  {
-    id: 'res-5',
-    name: 'Vani Vidyalaya Senior Secondary',
-    type: 'CBSE',
-    city: 'Chennai',
-    address: 'Nanganallur, Chennai 600061',
-    website: 'https://vanividyalaya.edu.in',
-    email: 'office@vanividyalaya.edu.in',
-    phone: '+91 44 2234 5566',
-    contactName: 'K. Sarala',
-    contactDesignation: 'Principal',
-    contactEmail: 'principal@vanividyalaya.edu.in',
-    source: 'Public school directory',
-    verification: 'needs-review',
-    duplicateOf: 'sch-5',
-    selected: false,
-  },
-]
+/**
+ * Workflow 2 research source.
+ *
+ * The full, filterable corpus lives in `researchCorpus.ts`. Duplicate detection
+ * against the seeded records runs once here so the agent and the Schools page
+ * share one result set and the same "already in records" flags.
+ */
+export const researchResults: ResearchResult[] = researchCorpus.map((result) => {
+  const normalized = result.name.trim().toLowerCase()
+  const existing = schools.find((school) => school.name.trim().toLowerCase() === normalized)
+  return existing ? { ...result, duplicateOf: existing.id } : result
+})
 
 export const integrations: Integration[] = [
   {
@@ -1185,22 +1115,6 @@ export const responseSplit = [
   { label: 'Declined', value: 5, tone: 'rose' },
 ]
 
-export const pipelineCounts: { stage: string; count: number }[] = [
-  { stage: 'New Lead', count: 14 },
-  { stage: 'Researching', count: 6 },
-  { stage: 'Contact Verified', count: 11 },
-  { stage: 'Ready for Appointment', count: 9 },
-  { stage: 'Invitation Sent', count: 12 },
-  { stage: 'Waiting for Response', count: 8 },
-  { stage: 'Appointment Confirmed', count: 7 },
-  { stage: 'Appointment Completed', count: 15 },
-  { stage: 'Follow-up Required', count: 5 },
-  { stage: 'Interested', count: 6 },
-  { stage: 'Converted', count: 4 },
-  { stage: 'Not Interested', count: 3 },
-  { stage: 'On Hold', count: 2 },
-]
-
 /** Available demo slots used by the agent flow. */
 export const demoTomorrowSlots = [
   { start: '09:30', end: '10:00', available: true },
@@ -1212,32 +1126,30 @@ export const demoTomorrowSlots = [
   { start: '16:00', end: '16:30', available: false, reason: 'Outside working hours' },
 ]
 
-export const schoolById = (id: string) => schools.find((s) => s.id === id)
+/** Stable record id for a school that came out of research. */
+export function researchSchoolId(result: ResearchResult): string {
+  return `sch-research-${result.id}`
+}
 
 /**
- * Converts a Workflow 2 research result into a school record the appointment
- * pages can reference. It never duplicates an existing school: a matching name
- * or an explicit `duplicateOf` link returns the record already on file.
+ * Builds the school record for a research result without touching the shared
+ * array, so a screen can stage a batch for review before committing it.
+ *
+ * `stage` lets the Lead Management screen enter new records at `New Lead`
+ * while the agent flow keeps its existing behaviour.
  */
-export function registerResearchSchool(result: ResearchResult, employeeId: string): School {
-  if (result.duplicateOf) {
-    const existing = schools.find((school) => school.id === result.duplicateOf)
-    if (existing) return existing
-  }
-  const normalized = result.name.trim().toLowerCase()
-  const existing = schools.find((school) => school.name.trim().toLowerCase() === normalized)
-  if (existing) return existing
-
-  const id = `sch-research-${result.id}`
-  const alreadyRegistered = schools.find((school) => school.id === id)
-  if (alreadyRegistered) return alreadyRegistered
-
-  const school: School = {
+export function researchResultToSchool(
+  result: ResearchResult,
+  employeeId: string,
+  stage?: School['stage'],
+): School {
+  const id = researchSchoolId(result)
+  return {
     id,
     name: result.name,
     type: result.type,
     city: result.city,
-    state: 'Tamil Nadu',
+    state: result.state,
     address: result.address,
     website: result.website,
     officialEmail: result.email || null,
@@ -1248,7 +1160,7 @@ export function registerResearchSchool(result: ResearchResult, employeeId: strin
     addedOn: day(0),
     lastContactedOn: null,
     nextFollowUpOn: null,
-    stage: result.verification === 'verified' ? 'Contact Verified' : 'Researching',
+    stage: stage ?? (result.verification === 'verified' ? 'Contact Verified' : 'Researching'),
     notes: 'Created from Workflow 2 research inside this preview session.',
     isDemo: true,
     isNewResearch: true,
@@ -1267,8 +1179,6 @@ export function registerResearchSchool(result: ResearchResult, employeeId: strin
       },
     ],
   }
-  schools.push(school)
-  return school
 }
 
 export const appointmentById = (id: string) => appointments.find((a) => a.id === id)

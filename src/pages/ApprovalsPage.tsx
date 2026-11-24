@@ -18,11 +18,11 @@ import { Table, TBody, TD, TH, THead, TR } from '../components/ui/Table'
 import { EmptyState } from '../components/ui/Avatar'
 import { UserChip } from '../components/layout/Topbar'
 import { useApp } from '../store/AppStore'
-import { appointmentById, schoolById } from '../data/demo'
+import { appointmentById } from '../data/demo'
 import { appointmentStatusTone, relativeTime, timeRange, weekdayDate } from '../lib/utils'
 
 export function ApprovalsPage() {
-  const { approvals, decideApproval, pushToast } = useApp()
+  const { approvals, decideApproval, pushToast, schoolById } = useApp()
   const [decision, setDecision] = useState<{ id: string; type: 'Approved' | 'Rejected' } | null>(null)
   const [note, setNote] = useState('')
 

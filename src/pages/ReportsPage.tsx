@@ -24,7 +24,8 @@ import { StatCard, MetricRow } from '../components/dashboard/StatCard'
 import { Donut, ProgressBar, TrendChart } from '../components/ui/Charts'
 import { Avatar } from '../components/ui/Avatar'
 import { useApp } from '../store/AppStore'
-import { pipelineCounts, schoolById, trend as demoTrend } from '../data/demo'
+import { trend as demoTrend } from '../data/demo'
+import { pipelineCountsFor } from '../lib/pipeline'
 import {
   appointmentStatusTone,
   cn,
@@ -60,12 +61,15 @@ const invitedStatuses = [
 const respondedStatuses = ['Alternative Time Requested', 'Confirmed', 'Declined', 'Rescheduled']
 
 export function ReportsPage() {
-  const { appointments, followUps, employees, isAdmin, user } = useApp()
+  const { appointments, followUps, employees, isAdmin, user, schools, schoolById } = useApp()
   const [range, setRange] = useState<RangeKey>('90')
   const [workflow, setWorkflow] = useState<WorkflowKey>('all')
   const [employeeFilter, setEmployeeFilter] = useState('all')
 
   const activeEmployeeFilter = isAdmin ? employeeFilter : (user?.id ?? 'all')
+
+  // Pipeline snapshot derived from the live school records (never fixed values).
+  const pipeline = pipelineCountsFor(schools)
 
   const cutoff = useMemo(() => {
     if (range === '30') return isoDay(-30)
@@ -410,16 +414,16 @@ export function ReportsPage() {
         <Card>
           <CardHeader
             title="Pipeline snapshot"
-            subtitle="Workspace-wide demonstration counts"
+            subtitle="Derived from the live school records"
             icon={<CalendarRange className="size-4.5" />}
           />
           <CardBody className="space-y-3">
-            {pipelineCounts.slice(0, 8).map((stage) => (
+            {pipeline.slice(0, 8).map((stage) => (
               <MetricRow
                 key={stage.stage}
                 label={stage.stage}
                 value={stage.count}
-                total={Math.max(...pipelineCounts.map((item) => item.count))}
+                total={Math.max(1, ...pipeline.map((item) => item.count))}
                 tone={
                   stage.stage.includes('Confirmed') || stage.stage.includes('Completed')
                     ? 'teal'
@@ -430,8 +434,8 @@ export function ReportsPage() {
               />
             ))}
             <p className="pt-1 text-[10.5px] text-slate-400">
-              Pipeline counts are fixed demonstration values. They are not affected by the filters
-              above.
+              Pipeline counts reflect every school on file, including records added in this session.
+              They are not affected by the appointment filters above.
             </p>
           </CardBody>
         </Card>

@@ -21,7 +21,7 @@ import { Modal } from '../components/ui/Modal'
 import { EmptyState } from '../components/ui/Avatar'
 import { UserChip } from '../components/layout/Topbar'
 import { useApp, type NewAppointmentInput } from '../store/AppStore'
-import { DEMO_EMPLOYEE_ID, employeeById, schoolById, schools } from '../data/demo'
+import { DEMO_EMPLOYEE_ID, employeeById } from '../data/demo'
 import {
   generateSlots,
   suggestDates,
@@ -51,7 +51,7 @@ const groups = {
 }
 
 export function AppointmentsPage() {
-  const { appointments, user, isAdmin } = useApp()
+  const { appointments, user, isAdmin, schoolById } = useApp()
   const [group, setGroup] = useState<keyof typeof groups>('all')
   const [query, setQuery] = useState('')
   const [owner, setOwner] = useState('all')
@@ -77,7 +77,7 @@ export function AppointmentsPage() {
         )
       })
       .sort((a, b) => `${b.date}${b.startTime}`.localeCompare(`${a.date}${a.startTime}`))
-  }, [mine, group, owner, format, query])
+  }, [mine, group, owner, format, query, schoolById])
 
   const counts = {
     all: mine.length,
@@ -259,7 +259,7 @@ export function AppointmentsPage() {
 }
 
 function CreateAppointmentModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { appointments, createAppointment, pushToast, schedulingPolicy, user } = useApp()
+  const { appointments, createAppointment, pushToast, schedulingPolicy, user, schools } = useApp()
   const navigate = useNavigate()
   const employeeId = user?.id ?? DEMO_EMPLOYEE_ID
   const eligible = schools.filter((school) => school.contacts.some((contact) => contact.verification === 'verified'))

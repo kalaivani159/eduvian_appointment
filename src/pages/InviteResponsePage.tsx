@@ -18,7 +18,7 @@ import { Button } from '../components/ui/Button'
 import { Badge, DemoTag } from '../components/ui/Badge'
 import { Input, Label, Textarea } from '../components/ui/Field'
 import { useApp } from '../store/AppStore'
-import { employeeById, schoolById } from '../data/demo'
+import { employeeById } from '../data/demo'
 import { cn, isoDay, longDate, timeLabel, timeRange, weekdayDate } from '../lib/utils'
 
 type View = 'confirm' | 'unavailable' | 'another' | 'confirmed' | 'declined' | 'alternative'
@@ -33,7 +33,7 @@ const openStatuses = [
 export function InviteResponsePage() {
   const { token = '' } = useParams()
   const [params] = useSearchParams()
-  const { appointments, updateAppointmentStatus } = useApp()
+  const { appointments, updateAppointmentStatus, schoolById } = useApp()
 
   const appointmentId = token.startsWith('demo-') ? token.slice('demo-'.length) : ''
   const appointment = appointments.find((item) => item.id === appointmentId)

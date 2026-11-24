@@ -75,6 +75,16 @@ The management account additionally sees **Approvals**, **Reports**, team-wide *
 
 Demo response links follow `/invite/demo-<appointmentId>`, for example `/invite/demo-apt-2` (awaiting a response), `/invite/demo-apt-1` (confirmed), and `/invite/demo-does-not-exist` (invalid). The page supports confirm, not available, and request-another-time, and updates the in-memory appointment status.
 
+## AI school research
+
+Research exists in two places — the **Research new schools** modal on `/schools` and Workflow 2 in the agent on `/agent` — and both run on the same engine (`src/lib/research.ts` over `src/data/researchCorpus.ts`).
+
+- **Filters** — state with dependent district, board, "Medium of school" (English medium only, on by default — other language mediums are removed because outreach targets English-medium schools), a "more than 2,000 students" toggle, a "prioritise reputed & well-established schools" toggle, and free-text keywords. The agent parses the same filters out of a typed request such as *“find English medium schools in Karnataka over 2000 students”*.
+- **Staged pipeline** — each run shows the staged steps (query sources → rank websites → visit sites → extract contacts → validate → duplicate check) over the corpus.
+- **Contact verification** — every result is graded by `verifyContactExtraction()`: e-mail format, phone format, and whether the e-mail domain belongs to the school's own website. Labels are always **Verified / Partially Verified / Unverified**, each card shows “n of 3 checks passed”, the page the contact was read from (`sourceUrl`), and the extraction method. Nothing is marked verified on trust and no contact detail is ever generated — missing values are shown as “No e-mail found / No phone found”.
+- **Results** — school name, board, location (city/district/state), student strength, medium (English), reputation tier with establishment year, contact person and designation, e-mail, phone, verification status and source link.
+- **Lead pipeline** — employees tick suitable results and press **Add N to Lead Management**; records enter the Schools & Leads pipeline at **New Lead**, names already on file are flagged “Already in records” and cannot be added twice. In the chat flow, ordinals like *“the third one”* always refer to the results currently on screen.
+
 ## Design system
 
 - Deep navy for navigation and structure.
@@ -100,6 +110,7 @@ Every integration is either **Not Connected** or **Configuration Required**. The
 - **Email** — invitations and reminders are previews. No message leaves the browser.
 - **Calendar** — availability and confirmed bookings are demonstration values, not real employee availability. No calendar event is created.
 - **AI model** — the agent conversation is a scripted front-end state machine (`src/features/agent/useAgentDemo.ts`). No prompt or response is sent to a provider.
+- **School research** — the school corpus (43 rows) is clearly-flagged demonstration data: no website is fetched and no contact is invented. The *verification logic is real* — format checks and e-mail-domain-vs-website matching run over the data at load time, which is why some rows come out Partially Verified or Unverified. Live crawling would replace `src/data/researchCorpus.ts` behind the same functions.
 - **Voice** — uses the browser `SpeechRecognition` API where available and `speechSynthesis` for playback. Nothing is recorded or uploaded; unsupported browsers show a clear message.
 - **Knowledge base** — documents are demonstration entries; no retrieval index exists.
 - **Messaging** — WhatsApp/SMS channels are not connected.
@@ -116,8 +127,10 @@ src/
   index.css               Tailwind v4 theme tokens
   store/AppStore.tsx      session, appointments, approvals, follow-ups, toasts
   data/demo.ts            single source of seed data and lookups
+  data/researchCorpus.ts  AI school-research corpus (derived verification)
   lib/
     types.ts              domain types (backend-shaped)
+    research.ts           research filters, verification and query parsing
     utils.ts              formatters, tone maps, CSV export
   components/
     layout/               AppShell, Sidebar, Topbar, command palette, demo banner
